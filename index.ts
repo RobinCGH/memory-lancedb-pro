@@ -667,7 +667,7 @@ function buildReflectionPrompt(
   maxInputChars: number,
   toolErrorSignals: ReflectionErrorSignal[] = []
 ): string {
-  const clipped = conversation.slice(0, maxInputChars);
+  const clipped = conversation.slice(-maxInputChars);
   const errorHints = toolErrorSignals.length > 0
     ? toolErrorSignals
       .map((e, i) => `${i + 1}. [${e.toolName}] ${e.summary} (sig:${e.signatureHash.slice(0, 8)})`)
@@ -2300,7 +2300,7 @@ function parsePluginConfig(value: unknown): PluginConfig {
         ? "systemSessionMemory"
       : legacySessionMemoryEnabled === false
           ? "none"
-      : "memoryReflection";
+      : "systemSessionMemory";
   const reflectionMessageCount = parsePositiveInt(memoryReflectionRaw?.messageCount ?? sessionMemoryRaw?.messageCount) ?? DEFAULT_REFLECTION_MESSAGE_COUNT;
   const injectModeRaw = memoryReflectionRaw?.injectMode;
   const reflectionInjectMode: ReflectionInjectMode =

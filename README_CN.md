@@ -148,8 +148,8 @@ Query → BM25 FTS ─────┘
 
 ### 7. Session 策略
 
-- `sessionStrategy: "memoryReflection"`（默认）：使用插件的 memory-reflection hooks
-- `sessionStrategy: "systemSessionMemory"`：关闭插件反思 hooks，改用 OpenClaw 内置 `session-memory`
+- `sessionStrategy: "systemSessionMemory"`（默认）：关闭插件反思 hooks，改用 OpenClaw 内置 `session-memory`
+- `sessionStrategy: "memoryReflection"`：使用插件的 memory-reflection hooks（需显式开启）
 - `sessionStrategy: "none"`：禁用本插件的会话策略 hooks
 - 兼容说明：`sessionMemory.enabled=true|false` 映射为 `systemSessionMemory|none`
 
@@ -172,7 +172,7 @@ Query → BM25 FTS ─────┘
 ### 9. memoryReflection
 
 - 触发条件：
-  - `sessionStrategy` 必须为 `memoryReflection`（默认）。
+  - `sessionStrategy` 必须为 `memoryReflection`（需显式配置）。
   - 触发事件为 `command:new` / `command:reset`。
   - 若会话上下文不完整（例如缺少 `cfg`、session 文件、可读对话内容），会跳过反思生成。
 - 反思执行链：
@@ -400,7 +400,7 @@ openclaw config get plugins.slots.memory
     "maxHalfLifeMultiplier": 3
   },
   "enableManagementTools": false,
-  "sessionStrategy": "memoryReflection",
+  "sessionStrategy": "systemSessionMemory",
   "scopes": {
     "default": "global",
     "definitions": {

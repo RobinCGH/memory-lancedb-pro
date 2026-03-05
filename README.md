@@ -148,8 +148,8 @@ Filters out low-quality content at both auto-capture and tool-store stages:
 
 ### 7. Session Strategy
 
-- `sessionStrategy: "memoryReflection"` (default): use plugin reflection hooks
-- `sessionStrategy: "systemSessionMemory"`: disable plugin reflection hooks; use OpenClaw built-in `session-memory`
+- `sessionStrategy: "systemSessionMemory"` (default): disable plugin reflection hooks; use OpenClaw built-in `session-memory`
+- `sessionStrategy: "memoryReflection"`: use plugin reflection hooks (explicit opt-in)
 - `sessionStrategy: "none"`: disable plugin session strategy hooks
 - Compatibility: legacy `sessionMemory.enabled=true|false` maps to `systemSessionMemory|none`
 
@@ -172,7 +172,7 @@ Filters out low-quality content at both auto-capture and tool-store stages:
 ### 9. memoryReflection
 
 - Trigger conditions:
-  - `sessionStrategy` must be `memoryReflection` (default).
+  - `sessionStrategy` must be `memoryReflection` (explicitly configured).
   - Trigger event is `command:new` / `command:reset`.
   - Reflection generation is skipped when session context is incomplete (for example missing `cfg`, session file, or readable conversation content).
 - Reflection runner chain:
@@ -402,7 +402,7 @@ openclaw config get plugins.slots.memory
     "maxHalfLifeMultiplier": 3
   },
   "enableManagementTools": false,
-  "sessionStrategy": "memoryReflection",
+  "sessionStrategy": "systemSessionMemory",
   "scopes": {
     "default": "global",
     "definitions": {

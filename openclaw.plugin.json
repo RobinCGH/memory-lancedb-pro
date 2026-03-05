@@ -80,7 +80,7 @@
           "systemSessionMemory",
           "none"
         ],
-        "default": "memoryReflection",
+        "default": "systemSessionMemory",
         "description": "Choose session pipeline: plugin memory-reflection, built-in session-memory, or none"
       },
       "autoCapture": {
