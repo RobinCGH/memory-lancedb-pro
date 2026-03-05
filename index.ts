@@ -24,6 +24,7 @@ import { SmartExtractor } from "./src/smart-extractor.js";
 import { createLlmClient } from "./src/llm-client.js";
 import { createDecayEngine, DEFAULT_DECAY_CONFIG } from "./src/decay-engine.js";
 import { createTierManager, DEFAULT_TIER_CONFIG } from "./src/tier-manager.js";
+import { createMemoryUpgrader } from "./src/memory-upgrader.js";
 
 // ============================================================================
 // Configuration & Types
@@ -438,6 +439,22 @@ const memoryLanceDBProPlugin = {
         scopeManager,
         migrator,
         embedder,
+        llmClient: smartExtractor ? (() => {
+          try {
+            const llmApiKey = config.llm?.apiKey
+              ? resolveEnvVars(config.llm.apiKey)
+              : resolveEnvVars(config.embedding.apiKey);
+            const llmBaseURL = config.llm?.baseURL
+              ? resolveEnvVars(config.llm.baseURL)
+              : config.embedding.baseURL;
+            return createLlmClient({
+              apiKey: llmApiKey,
+              model: config.llm?.model || "gpt-4o-mini",
+              baseURL: llmBaseURL,
+              timeoutMs: 30000,
+            });
+          } catch { return undefined; }
+        })() : undefined,
       }),
       { commands: ["memory-pro"] }
     );
@@ -797,6 +814,22 @@ const memoryLanceDBProPlugin = {
 
         // Fire-and-forget: allow gateway to start serving immediately.
         setTimeout(() => void runStartupChecks(), 0);
+
+        // Check for legacy memories that could be upgraded
+        setTimeout(async () => {
+          try {
+            const upgrader = createMemoryUpgrader(store, null);
+            const counts = await upgrader.countLegacy();
+            if (counts.legacy > 0) {
+              api.logger.info(
+                `memory-lancedb-pro: found ${counts.legacy} legacy memories (of ${counts.total} total) that can be upgraded to the new smart memory format. ` +
+                `Run 'openclaw memory-pro upgrade' to convert them.`
+              );
+            }
+          } catch {
+            // Non-critical: silently ignore
+          }
+        }, 5_000);
 
         // Run initial backup after a short delay, then schedule daily
         setTimeout(() => void runBackup(), 60_000); // 1 min after start

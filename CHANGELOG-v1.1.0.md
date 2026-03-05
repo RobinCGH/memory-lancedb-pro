@@ -141,6 +141,18 @@ Peripheral（外围） ⟷ Working（工作） ⟷ Core（核心）
 
 ---
 
+### 7. `src/memory-upgrader.ts` — 旧记忆升级器
+
+将旧格式记忆（无 L0/L1/L2 / 5 类别）批量升级为新智能记忆格式，统一生命周期管理：
+
+- **反向类别映射**：`fact→profile/cases`（含启发式+LLM 判断）、`preference→preferences`、`entity→entities`、`decision→events`、`other→patterns`
+- **L0/L1/L2 生成**：LLM 模式（推荐）或 无 LLM 模式（首句截取+原文保留）
+- **元数据补全**：自动填充 `tier: "working"`、`access_count: 0`、`confidence: 0.7`
+- **批量处理**：支持 `--batch-size`、`--limit`、`--dry-run` 控制
+- **启动检测**：插件启动 5 秒后自动检测旧记忆数量，日志提示升级
+
+---
+
 ## 四、修改文件
 
 ### `index.ts` — 插件入口
@@ -169,6 +181,25 @@ extractMaxChars?: number;     // 送入 LLM 的最大字符数（默认 8000）
 - 注入的记忆上下文现在显示 L0 摘要而非原始文本
 - 新增 6 类别标签（如 `[preferences:global]`）
 - 新增层级标记（`[C]`ore / `[W]`orking / `[P]`eripheral）
+
+#### 启动时旧记忆检测
+
+- 插件启动 5 秒后异步扫描旧格式记忆数量
+- 如发现旧格式记忆，在日志中输出提示：`Run 'openclaw memory-pro upgrade' to convert them.`
+
+### `cli.ts` — CLI 命令
+
+#### 新增 `memory-pro upgrade` 命令
+
+```bash
+openclaw memory-pro upgrade [--dry-run] [--batch-size N] [--no-llm] [--limit N] [--scope SCOPE]
+```
+
+- `--dry-run`：仅统计旧记忆数量，不修改数据
+- `--batch-size`：每批处理数量（默认 10）
+- `--no-llm`：不调用 LLM，使用简单规则生成 L0/L1/L2
+- `--limit`：最大升级数量
+- `--scope`：仅升级指定 scope 的记忆
 
 ---
 
@@ -225,3 +256,4 @@ extractMaxChars?: number;     // 送入 LLM 的最大字符数（默认 8000）
 | 去重逻辑       | 仅在 `smartExtraction: true` 时生效            |
 | 已有数据       | 旧记忆正常读取，新记忆额外携带 L0/L1/L2 元数据 |
 | 配置           | 全部新增配置项均有默认值，零配置即可使用       |
+| **旧记忆升级** | `memory-pro upgrade` 命令一键升级为新格式      |
