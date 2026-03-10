@@ -180,6 +180,7 @@ export class MemoryStore {
   private table: LanceDB.Table | null = null;
   private initPromise: Promise<void> | null = null;
   private ftsIndexCreated = false;
+  private updateQueue: Promise<void> = Promise.resolve();
 
   constructor(private readonly config: StoreConfig) {}
 
@@ -762,79 +763,138 @@ export class MemoryStore {
   ): Promise<MemoryEntry | null> {
     await this.ensureInitialized();
 
-    // Support both full UUID and short prefix (8+ hex chars), same as delete()
-    const uuidRegex =
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    const prefixRegex = /^[0-9a-f]{8,}$/i;
-    const isFullId = uuidRegex.test(id);
-    const isPrefix = !isFullId && prefixRegex.test(id);
+    return this.runSerializedUpdate(async () => {
+      // Support both full UUID and short prefix (8+ hex chars), same as delete()
+      const uuidRegex =
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      const prefixRegex = /^[0-9a-f]{8,}$/i;
+      const isFullId = uuidRegex.test(id);
+      const isPrefix = !isFullId && prefixRegex.test(id);
 
-    if (!isFullId && !isPrefix) {
-      throw new Error(`Invalid memory ID format: ${id}`);
-    }
+      if (!isFullId && !isPrefix) {
+        throw new Error(`Invalid memory ID format: ${id}`);
+      }
 
-    let rows: any[];
-    if (isFullId) {
-      const safeId = escapeSqlLiteral(id);
-      rows = await this.table!.query()
-        .where(`id = '${safeId}'`)
-        .limit(1)
-        .toArray();
-    } else {
-      // Prefix match
-      const all = await this.table!.query()
-        .select([
-          "id",
-          "text",
-          "vector",
-          "category",
-          "scope",
-          "importance",
-          "timestamp",
-          "metadata",
-        ])
-        .limit(1000)
-        .toArray();
-      rows = all.filter((r: any) => (r.id as string).startsWith(id));
-      if (rows.length > 1) {
+      let rows: any[];
+      if (isFullId) {
+        const safeId = escapeSqlLiteral(id);
+        rows = await this.table!.query()
+          .where(`id = '${safeId}'`)
+          .limit(1)
+          .toArray();
+      } else {
+        // Prefix match
+        const all = await this.table!.query()
+          .select([
+            "id",
+            "text",
+            "vector",
+            "category",
+            "scope",
+            "importance",
+            "timestamp",
+            "metadata",
+          ])
+          .limit(1000)
+          .toArray();
+        rows = all.filter((r: any) => (r.id as string).startsWith(id));
+        if (rows.length > 1) {
+          throw new Error(
+            `Ambiguous prefix "${id}" matches ${rows.length} memories. Use a longer prefix or full ID.`,
+          );
+        }
+      }
+
+      if (rows.length === 0) return null;
+
+      const row = rows[0];
+      const rowScope = (row.scope as string | undefined) ?? "global";
+
+      // Check scope permissions
+      if (
+        scopeFilter &&
+        scopeFilter.length > 0 &&
+        !scopeFilter.includes(rowScope)
+      ) {
+        throw new Error(`Memory ${id} is outside accessible scopes`);
+      }
+
+      const original: MemoryEntry = {
+        id: row.id as string,
+        text: row.text as string,
+        vector: Array.from(row.vector as Iterable<number>),
+        category: row.category as MemoryEntry["category"],
+        scope: rowScope,
+        importance: Number(row.importance),
+        timestamp: Number(row.timestamp),
+        metadata: (row.metadata as string) || "{}",
+      };
+
+      // Build updated entry, preserving original timestamp
+      const updated: MemoryEntry = {
+        ...original,
+        text: updates.text ?? original.text,
+        vector: updates.vector ?? original.vector,
+        category: updates.category ?? original.category,
+        scope: rowScope,
+        importance: updates.importance ?? original.importance,
+        timestamp: original.timestamp, // preserve original
+        metadata: updates.metadata ?? original.metadata,
+      };
+
+      // LanceDB doesn't support in-place update; delete + re-add.
+      // Serialize updates per store instance to avoid stale rollback races.
+      // If the add fails after delete, attempt best-effort recovery without
+      // overwriting a newer concurrent successful update.
+      const rollbackCandidate =
+        (await this.getById(original.id).catch(() => null)) ?? original;
+      const resolvedId = escapeSqlLiteral(row.id as string);
+      await this.table!.delete(`id = '${resolvedId}'`);
+      try {
+        await this.table!.add([updated]);
+      } catch (addError) {
+        const current = await this.getById(original.id).catch(() => null);
+        if (current) {
+          throw new Error(
+            `Failed to update memory ${id}: write failed after delete, but an existing record was preserved. ` +
+            `Write error: ${addError instanceof Error ? addError.message : String(addError)}`,
+          );
+        }
+
+        try {
+          await this.table!.add([rollbackCandidate]);
+        } catch (rollbackError) {
+          throw new Error(
+            `Failed to update memory ${id}: write failed after delete, and rollback also failed. ` +
+            `Write error: ${addError instanceof Error ? addError.message : String(addError)}. ` +
+            `Rollback error: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
+          );
+        }
+
         throw new Error(
-          `Ambiguous prefix "${id}" matches ${rows.length} memories. Use a longer prefix or full ID.`,
+          `Failed to update memory ${id}: write failed after delete, latest available record restored. ` +
+          `Write error: ${addError instanceof Error ? addError.message : String(addError)}`,
         );
       }
+
+      return updated;
+    });
+  }
+
+  private async runSerializedUpdate<T>(action: () => Promise<T>): Promise<T> {
+    const previous = this.updateQueue;
+    let release: (() => void) | undefined;
+    const lock = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.updateQueue = previous.then(() => lock);
+
+    await previous;
+    try {
+      return await action();
+    } finally {
+      release?.();
     }
-
-    if (rows.length === 0) return null;
-
-    const row = rows[0];
-    const rowScope = (row.scope as string | undefined) ?? "global";
-
-    // Check scope permissions
-    if (
-      scopeFilter &&
-      scopeFilter.length > 0 &&
-      !scopeFilter.includes(rowScope)
-    ) {
-      throw new Error(`Memory ${id} is outside accessible scopes`);
-    }
-
-    // Build updated entry, preserving original timestamp
-    const updated: MemoryEntry = {
-      id: row.id as string,
-      text: updates.text ?? (row.text as string),
-      vector: updates.vector ?? Array.from(row.vector as Iterable<number>),
-      category: updates.category ?? (row.category as MemoryEntry["category"]),
-      scope: rowScope,
-      importance: updates.importance ?? Number(row.importance),
-      timestamp: Number(row.timestamp), // preserve original
-      metadata: updates.metadata ?? ((row.metadata as string) || "{}"),
-    };
-
-    // LanceDB doesn't support in-place update; delete + re-add
-    const resolvedId = escapeSqlLiteral(row.id as string);
-    await this.table!.delete(`id = '${resolvedId}'`);
-    await this.table!.add([updated]);
-
-    return updated;
   }
 
   async patchMetadata(
